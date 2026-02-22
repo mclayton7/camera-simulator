@@ -1,0 +1,66 @@
+# CamSim sidecar Docker image
+# Includes GStreamer with good/bad/ugly/libav/nvenc plugins and Python 3.11+
+#
+# Build:
+#   docker build -f docker/Dockerfile.sidecar -t camsim-sidecar .
+#
+# Run (GPU):
+#   docker run --gpus all --ipc=host --network=host camsim-sidecar
+
+FROM ubuntu:22.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+# ---------------------------------------------------------------------------
+# System packages: GStreamer + Python
+# ---------------------------------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # GStreamer core + plugins
+    gstreamer1.0-tools \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad \
+    gstreamer1.0-plugins-ugly \
+    gstreamer1.0-libav \
+    # GStreamer Python bindings
+    python3-gst-1.0 \
+    gir1.2-gstreamer-1.0 \
+    gir1.2-gst-plugins-base-1.0 \
+    # Python
+    python3.11 \
+    python3.11-dev \
+    python3-pip \
+    # Shared memory utilities
+    librt-dev \
+    # Networking
+    iproute2 \
+    && rm -rf /var/lib/apt/lists/*
+
+# NVENC GStreamer plugin (requires NVIDIA container runtime)
+# Uncomment if nvidia-gstreamer plugins are available in your registry:
+# RUN apt-get update && apt-get install -y gstreamer1.0-plugins-bad-nvidia && rm -rf /var/lib/apt/lists/*
+
+# ---------------------------------------------------------------------------
+# Python dependencies
+# ---------------------------------------------------------------------------
+WORKDIR /app
+
+COPY sidecar/pyproject.toml sidecar/
+COPY sidecar/camsim_sidecar/ sidecar/camsim_sidecar/
+
+RUN pip3 install --no-cache-dir posix-ipc && \
+    pip3 install --no-cache-dir -e sidecar/
+
+# Copy tools for klv_decoder import
+COPY tools/ tools/
+
+# ---------------------------------------------------------------------------
+# Runtime
+# ---------------------------------------------------------------------------
+ENV GST_DEBUG=2
+
+# Shared memory is accessed via /dev/shm — requires --ipc=host in docker run
+VOLUME ["/dev/shm"]
+
+ENTRYPOINT ["python3", "-m", "camsim_sidecar"]
+CMD ["--host", "239.1.1.1", "--port", "5004"]

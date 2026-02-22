@@ -1,0 +1,26 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "5.3",
+	"Category": "",
+	"Description": "EO/IR Camera Simulator with Cesium World Terrain, MPEG-TS/KLV output",
+	"Modules": [
+		{
+			"Name": "CameraSimulator",
+			"Type": "Runtime",
+			"LoadingPhase": "Default",
+			"AdditionalDependencies": [
+				"Engine"
+			]
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "CesiumForUnreal",
+			"Enabled": true
+		},
+		{
+			"Name": "CamSimPlugin",
+			"Enabled": true
+		}
+	]
+}

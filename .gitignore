@@ -1,0 +1,47 @@
+# Unreal Engine
+UnrealProject/Binaries/
+UnrealProject/Build/
+UnrealProject/DerivedDataCache/
+UnrealProject/Intermediate/
+UnrealProject/Saved/
+UnrealProject/.vs/
+*.uasset
+*.umap
+*.vc.db
+*.opendb
+*.sdf
+*.opensdf
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# Secrets — NEVER commit tokens
+.env
+*.env
+.env.*
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Linux
+*~
+
+# Docker
+docker/.env
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo

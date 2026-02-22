@@ -1,0 +1,62 @@
+version: "3.9"
+
+# CamSim docker-compose
+#
+# Services:
+#   sidecar — GStreamer MPEG-TS encoder + KLV muxer
+#
+# The Unreal Engine process runs on the host (or in a separate VM with GPU
+# access); this compose file manages only the Python sidecar.
+#
+# Usage:
+#   docker compose -f docker/docker-compose.yml up
+#   CAMSIM_HOST=192.168.1.100 CAMSIM_PORT=5004 docker compose up
+
+services:
+  sidecar:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.sidecar
+    image: camsim-sidecar:latest
+
+    # NVIDIA GPU runtime for nvh264enc
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    # Share host IPC namespace so POSIX shm regions are visible
+    ipc: host
+
+    # Host networking for multicast UDP
+    network_mode: host
+
+    environment:
+      GST_DEBUG: "${GST_DEBUG:-2}"
+      # Optional: override via env
+      CAMSIM_HOST: "${CAMSIM_HOST:-239.1.1.1}"
+      CAMSIM_PORT: "${CAMSIM_PORT:-5004}"
+      CAMSIM_BITRATE: "${CAMSIM_BITRATE:-4000}"
+
+    command:
+      - "--host"
+      - "${CAMSIM_HOST:-239.1.1.1}"
+      - "--port"
+      - "${CAMSIM_PORT:-5004}"
+      - "--bitrate"
+      - "${CAMSIM_BITRATE:-4000}"
+      - "--log-level"
+      - "${CAMSIM_LOG_LEVEL:-INFO}"
+
+    restart: unless-stopped
+
+    # Health check: verify process is running
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import camsim_sidecar"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

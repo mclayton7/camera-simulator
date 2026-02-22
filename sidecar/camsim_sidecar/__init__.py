@@ -1,0 +1,1 @@
+# CamSim sidecar package

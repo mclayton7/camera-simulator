@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "camsim-sidecar"
+version = "0.1.0"
+description = "CamSim sidecar: SHM frames + KLV telemetry → GStreamer MPEG-TS/UDP"
+requires-python = ">=3.11"
+dependencies = [
+    "posix-ipc>=1.1.1",
+    # GStreamer Python bindings are system packages — install via:
+    #   apt install python3-gst-1.0  (Debian/Ubuntu)
+    #   brew install gstreamer pygobject3  (macOS)
+]
+
+[project.scripts]
+camsim-sidecar = "camsim_sidecar.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["camsim_sidecar*"]
