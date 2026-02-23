@@ -195,7 +195,35 @@ are silently dropped.
 | 0x05 | SetHeading | `f32 heading_deg` | Set aircraft true heading (0 = north, clockwise). |
 | 0x06 | SetSpeed | `f32 speed_kts` | Set aircraft indicated airspeed in knots. |
 | 0x07 | SetGimbalAbs | `f32 pan_deg, f32 tilt_deg` | Jump gimbal to absolute position; clears slew rates. |
+| 0x08 | SetFlightState | `f64 lat_deg, f64 lon_deg, f32 alt_m_hae, f32 heading_deg, f32 pitch_deg, f32 roll_deg, f32 speed_kts` | Set full aircraft state; disables dead-reckoning (36 bytes). |
 | 0xFF | Ping | (none) | No-op; useful for testing connectivity. |
+
+### SetFlightState Semantics
+
+`SetFlightState` (0x08) sets all aircraft kinematic state in a single packet:
+position (lat/lon/alt), attitude (heading/pitch/roll), and speed. On first
+receipt, `AircraftKinematicActor` sets `bExternallyDriven = true` and stops
+running `AdvancePosition()` dead-reckoning. From that point the external
+sender (typically `tools/flight_director.py`) is responsible for continuous
+state updates.
+
+The flag is not automatically cleared — if the external sender stops, the
+aircraft freezes at its last reported state. Restart UE5 to re-enable
+dead-reckoning.
+
+Payload layout (36 bytes, little-endian):
+
+```
+Offset  Size  Type  Field
+──────  ────  ────  ─────────────
+0       8     f64   lat_deg        WGS-84 latitude
+8       8     f64   lon_deg        WGS-84 longitude
+16      4     f32   alt_m_hae      Height above ellipsoid (metres)
+20      4     f32   heading_deg    True heading (0 = north, clockwise)
+24      4     f32   pitch_deg      Nose pitch (positive = up)
+28      4     f32   roll_deg       Bank angle (positive = right wing down)
+32      4     f32   speed_kts      Indicated airspeed (knots)
+```
 
 ### Slew Rate Semantics
 

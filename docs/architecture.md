@@ -20,8 +20,8 @@ memory:
 ## Data-Flow Diagram
 
 ```
- External controller (e.g. inject_commands.py)
-        │ UDP :5005
+ flight_director.py (JSBSim 6-DOF)  or  inject_commands.py
+        │ UDP :5005 (SetFlightState 0x08 @ 30 Hz)
         ▼
 ┌───────────────────────────────────────────────────────────────────┐
 │                     Unreal Engine 5 Process                       │
@@ -32,7 +32,9 @@ memory:
 │         │                                                         │
 │         ▼                                                         │
 │  AircraftKinematicActor (AActor, ticked at game rate)            │
-│    Haversine dead-reckoning → lat/lon advances each tick         │
+│    If bExternallyDriven: skip AdvancePosition (flight director   │
+│      owns state via SetFlightState)                              │
+│    Else: haversine dead-reckoning → lat/lon advances each tick   │
 │    ACesiumGeoreference::TransformLLH → Unreal world coords       │
 │         │                                                         │
 │         ├──► GimbalComponent (UActorComponent)                   │
@@ -114,8 +116,11 @@ On each `Tick`:
    world coordinates via `ACesiumGeoreference::TransformLLH`.
 3. Sub-components tick independently (via `UActorComponent::TickComponent`).
 
-UDP command handlers (`HandleSetPosition`, `HandleSetHeading`, `HandleSetSpeed`)
-are called from `CommandReceiver` on the game thread — no locking required.
+UDP command handlers (`HandleSetPosition`, `HandleSetHeading`, `HandleSetSpeed`,
+`HandleSetFlightState`) are called from `CommandReceiver` on the game thread —
+no locking required. `HandleSetFlightState` additionally sets
+`bExternallyDriven = true`, which disables `AdvancePosition()` for the
+remainder of the session.
 
 ### `GimbalComponent`
 
@@ -245,6 +250,28 @@ formula on a spherical-Earth approximation (radius 6,378,137 m, the WGS-84
 semi-major axis). The WGS-84 ellipsoid causes less than 0.3% position error
 over the time scales of a simulator session. A full geodetic integrator would
 add complexity with no perceptible benefit for rendering purposes.
+
+When the **flight director** (`tools/flight_director.py`) is active, it
+replaces the built-in dead-reckoning entirely. JSBSim provides full 6-DOF
+dynamics (lift, drag, thrust, gravity, wind) and the flight director sends
+the resulting state at 30 Hz via `SetFlightState` (0x08). UE5 becomes a pure
+renderer — it applies the received position/attitude each tick without any
+kinematic integration of its own.
+
+### Why a Separate Flight Director Process?
+
+Embedding JSBSim inside UE5 would require building JSBSim as a C++ library
+and linking it into the UE5 plugin. This adds a complex native dependency
+to the UE5 build, complicates cross-platform builds, and couples flight
+model updates to plugin rebuilds.
+
+Running JSBSim as a separate Python process (or Docker container) that
+communicates over the existing UDP command protocol provides:
+- **Decoupling:** flight model changes require no UE5 rebuild.
+- **Testability:** the flight director can be tested standalone without UE5.
+- **Deployability:** runs in a lightweight container with no GPU requirement.
+- **Replaceability:** swap JSBSim for X-Plane, FlightGear, or a custom model
+  by sending the same `SetFlightState` packets.
 
 ### MPEG-TS PID Assignments
 

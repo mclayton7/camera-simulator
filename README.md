@@ -61,12 +61,14 @@ camera-simulator/
 ├── tools/
 │   ├── recv_and_inspect.py            UDP MPEG-TS inspector + KLV decoder
 │   ├── inject_commands.py             Manual slew/position command sender
+│   ├── flight_director.py            JSBSim flight director (UDP → UE5)
 │   └── klv_decoder.py                 Standalone KLV parser (lib + CLI)
 │
 ├── docker/
 │   ├── Dockerfile.sidecar          Sidecar image (Ubuntu + GStreamer)
 │   ├── Dockerfile.framegen         Synthetic frame generator image
-│   ├── docker-compose.yml          Linux production (UE5 on host + sidecar)
+│   ├── Dockerfile.flightdir        Flight director image (JSBSim)
+│   ├── docker-compose.yml          Linux production (sidecar + flight director)
 │   └── docker-compose.mac.yml     macOS dev stack (frame-gen + sidecar)
 │
 ├── scripts/
@@ -163,8 +165,8 @@ cd sidecar && pytest test_klv_encoder.py -v
 ## System Architecture (Summary)
 
 ```
- inject_commands.py
-       │ UDP :5005
+ flight_director.py / inject_commands.py
+       │ UDP :5005 (SetFlightState 0x08 @ 30 Hz)
        ▼
 ┌─────────────────────────────────────────────────────────┐
 │                  Unreal Engine 5 Process                │
@@ -211,6 +213,7 @@ Header: `[magic=0x43534D53 u32LE] [type u8] [reserved u8] [payload_len u16LE]`
 | 0x05 | SetHeading | `f32 heading_deg` | True heading (0 = north, CW). |
 | 0x06 | SetSpeed | `f32 speed_kts` | Airspeed in knots. |
 | 0x07 | SetGimbalAbs | `f32 pan_deg, f32 tilt_deg` | Absolute gimbal position. |
+| 0x08 | SetFlightState | `f64 lat, f64 lon, f32 alt, f32 hdg, f32 pitch, f32 roll, f32 speed` | Full aircraft state (disables dead-reckoning). |
 | 0xFF | Ping | (none) | No-op connectivity check. |
 
 See [docs/ipc-protocol.md](docs/ipc-protocol.md) for full wire-format details.

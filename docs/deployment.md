@@ -260,6 +260,357 @@ receiver. The KLV encoder and GStreamer pipeline are unaffected.
 
 ---
 
+## Flight Director Service
+
+The flight director runs a JSBSim 6-DOF flight dynamics model and sends
+aircraft state to UE5 (or frame-gen) via the `SetFlightState` (0x08) UDP
+command at a configurable rate. This replaces the built-in haversine
+dead-reckoning with realistic banking turns, altitude hold, and coordinated
+flight.
+
+### How It Works
+
+1. JSBSim initialises a Cessna 172 (or other aircraft model) at the specified
+   position, altitude, and speed.
+2. A proportional controller holds the target bank angle, altitude, and speed
+   — the aircraft flies a steady surveillance orbit.
+3. Every tick (default 30 Hz), the flight director reads JSBSim state
+   (lat, lon, alt, heading, pitch, roll, speed) and sends a `SetFlightState`
+   UDP packet to UE5's `CommandReceiver`.
+4. On receipt, UE5 sets `bExternallyDriven = true` and stops running its own
+   `AdvancePosition()` dead-reckoning. The flight director owns all position
+   and attitude state from that point forward.
+
+### Standalone Usage
+
+```bash
+# Default: sends to localhost:5005 at 30 Hz
+python tools/flight_director.py
+
+# Custom orbit parameters
+python tools/flight_director.py \
+    --host 192.168.1.50 --port 5005 \
+    --speed 120 --heading 90 \
+    --lat 36.5 --lon -117.5 --alt-ft 8000 \
+    --bank-angle 30 --rate 30
+
+# Send to frame-gen (macOS dev) instead of UE5
+python tools/flight_director.py --host host.docker.internal --port 5005
+```
+
+### CLI Arguments
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--host` | `127.0.0.1` | UE5 command receiver host |
+| `--port` | `5005` | UE5 command receiver UDP port |
+| `--rate` | `30` | State update rate in Hz |
+| `--aircraft` | `c172p` | JSBSim aircraft model |
+| `--speed` | `100` | Target airspeed in knots |
+| `--heading` | `0` | Initial true heading in degrees |
+| `--lat` | `36.5` | Initial latitude in degrees |
+| `--lon` | `-117.5` | Initial longitude in degrees |
+| `--alt-ft` | `5000` | Target altitude in feet MSL |
+| `--bank-angle` | `25` | Target bank angle for orbit in degrees |
+
+### Docker (Linux)
+
+The flight director is included in `docker-compose.yml` as the
+`flight-director` service:
+
+```bash
+docker compose -f docker/docker-compose.yml up
+```
+
+This starts both the sidecar and the flight director. Override flight
+parameters with environment variables:
+
+```bash
+FLIGHTDIR_SPEED=120 FLIGHTDIR_BANK=30 FLIGHTDIR_ALT_FT=8000 \
+    docker compose -f docker/docker-compose.yml up
+```
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FLIGHTDIR_HOST` | `127.0.0.1` | UE5 command receiver host |
+| `FLIGHTDIR_PORT` | `5005` | UE5 command receiver port |
+| `FLIGHTDIR_RATE` | `30` | Update rate in Hz |
+| `FLIGHTDIR_SPEED` | `100` | Airspeed in knots |
+| `FLIGHTDIR_HEADING` | `0` | Initial heading in degrees |
+| `FLIGHTDIR_ALT_FT` | `5000` | Altitude in feet MSL |
+| `FLIGHTDIR_BANK` | `25` | Bank angle in degrees |
+
+### Docker (macOS)
+
+On macOS the flight director is behind a Docker Compose profile because
+`frame-gen` already has JSBSim built in. To start it alongside the dev stack:
+
+```bash
+docker compose -f docker/docker-compose.mac.yml --profile flightdir up --build
+```
+
+Without `--profile flightdir`, only `frame-gen` + `sidecar` start (same as
+before).
+
+### Manual Testing with inject_commands
+
+Send a single `SetFlightState` packet for testing:
+
+```bash
+python tools/inject_commands.py set-flight-state \
+    --lat 36.5 --lon -117.5 --alt 1500 \
+    --heading 90 --pitch 3 --roll 25 --speed 100
+```
+
+> **Note:** Once UE5 receives its first `SetFlightState` packet,
+> dead-reckoning is permanently disabled for the session. The flight director
+> (or manual inject) must keep sending updates to keep the aircraft moving.
+
+---
+
+## Containerised UE5 on Linux
+
+For production deployments where UE5 itself runs inside a container. This
+requires packaging the UE5 project as a standalone binary and running it with
+GPU access inside Docker.
+
+### Prerequisites
+
+| Requirement | Version | Notes |
+|-------------|---------|-------|
+| NVIDIA GPU | Turing or later | Required for Vulkan rendering |
+| NVIDIA driver | ≥ 535 | Must match the Container Toolkit version |
+| [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) | ≥ 1.14 | Provides `--gpus` / `--runtime=nvidia` |
+| Docker | ≥ 24.0 | With Compose V2 plugin |
+| Vulkan ICD | installed in container | See Dockerfile below |
+
+### Step 1 — Package the UE5 Project
+
+Package the project on a machine with the Unreal Editor installed. This
+produces a standalone Linux binary with no editor dependency.
+
+```bash
+# From a machine with UE5 installed
+/path/to/UnrealEngine/Engine/Build/BatchFiles/RunUAT.sh BuildCookRun \
+    -project="$(pwd)/UnrealProject/CameraSimulator.uproject" \
+    -noP4 -platform=Linux -clientconfig=Shipping \
+    -cook -allmaps -build -stage -pak -archive \
+    -archivedirectory="$(pwd)/PackagedBuild"
+```
+
+This creates `PackagedBuild/LinuxServer/CameraSimulator/` with the packaged
+binary, content paks, and required shared libraries.
+
+### Step 2 — Build the UE5 Container Image
+
+Create `docker/Dockerfile.ue5`:
+
+```dockerfile
+FROM nvidia/vulkan:1.3-470 AS base
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libvulkan1 vulkan-tools mesa-vulkan-drivers \
+        libx11-6 libxext6 libxrandr2 libxi6 libgl1 \
+        xvfb \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy the packaged UE5 build
+COPY PackagedBuild/LinuxServer/CameraSimulator /opt/camsim
+
+# Make the binary executable
+RUN chmod +x /opt/camsim/CameraSimulator.sh
+
+# Xvfb display + Vulkan rendering
+ENV DISPLAY=:99
+
+ENTRYPOINT ["/bin/bash", "-c", \
+    "Xvfb :99 -screen 0 1920x1080x24 &\n\
+     sleep 2\n\
+     exec /opt/camsim/CameraSimulator.sh \
+         -RHI=Vulkan \
+         -unattended \
+         -nosplash \
+         -nosound \
+         -nullrhi=0 \
+         -log \
+         \"$@\"", "--"]
+```
+
+Build:
+```bash
+docker build -f docker/Dockerfile.ue5 -t camsim-ue5:latest .
+```
+
+### Step 3 — Test the UE5 Container
+
+```bash
+docker run --rm \
+    --gpus all \
+    --ipc=host \
+    -e CESIUM_ION_TOKEN="your_token_here" \
+    camsim-ue5:latest
+```
+
+Verify:
+- Vulkan initialises (`vulkaninfo --summary` inside container should show your GPU)
+- Shared memory regions appear in `/dev/shm/camsim_frames` and `/dev/shm/camsim_telemetry`
+- The sidecar (running separately or via compose) picks up frames
+
+### Important Notes
+
+- **`--ipc=host` is required** for both the UE5 container and the sidecar
+  container — they communicate through POSIX shared memory in `/dev/shm`.
+- **`--gpus all`** passes NVIDIA GPUs into the container via the NVIDIA
+  Container Toolkit.
+- **Xvfb** provides a virtual X display. UE5 needs an X server even for
+  offscreen rendering with Vulkan. The `DISPLAY=:99` env var tells UE5 to
+  connect to the virtual display.
+- **Cesium ion token** must be passed as an environment variable — never bake
+  it into the image.
+- The packaged build is large (5–20 GB depending on content). Use multi-stage
+  builds or `.dockerignore` to keep intermediate artifacts out of the image.
+- For production, consider using `nvidia/cuda` as a base image instead of
+  `nvidia/vulkan` if you need CUDA alongside Vulkan.
+
+---
+
+## Production Deployment (Full Stack)
+
+A complete production deployment on a Linux GPU server runs three services:
+
+| Service | Role | Container | Network |
+|---------|------|-----------|---------|
+| **UE5** | Renders terrain, writes frames + telemetry to shm | `camsim-ue5` | `--ipc=host --network=host` |
+| **Sidecar** | Encodes H.264 + KLV, sends MPEG-TS/UDP | `camsim-sidecar` | `--ipc=host --network=host` |
+| **Flight Director** | JSBSim flight dynamics → `SetFlightState` UDP | `camsim-flightdir` | `--network=host` |
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        Linux GPU Server                          │
+│                                                                  │
+│  ┌──────────────┐   UDP :5005    ┌────────────────────────────┐ │
+│  │  flight-     │ ──────────────►│  UE5 container             │ │
+│  │  director    │  SetFlightState│  (nvidia/vulkan + Xvfb)    │ │
+│  │  (JSBSim)   │                │                            │ │
+│  └──────────────┘                │  CommandReceiver ◄── UDP   │ │
+│                                  │  AircraftKinematicActor    │ │
+│                                  │  SceneCapture → ReadPixels │ │
+│                                  │       │                    │ │
+│                                  │       ▼ POSIX shm          │ │
+│                                  │  /dev/shm/camsim_frames    │ │
+│                                  │  /dev/shm/camsim_telemetry │ │
+│                                  └────────────┬───────────────┘ │
+│                                               │ --ipc=host      │
+│                                  ┌────────────┴───────────────┐ │
+│                                  │  sidecar container         │ │
+│                                  │  (GStreamer + NVENC)        │ │
+│                                  │                            │ │
+│                                  │  shm_reader → H.264 encode │ │
+│                                  │  klv_encoder → KLV mux     │ │
+│                                  │  mpegtsmux → udpsink       │ │
+│                                  └────────────┬───────────────┘ │
+│                                               │                  │
+└───────────────────────────────────────────────┼──────────────────┘
+                                                │ UDP MPEG-TS :5004
+                                                ▼
+                                  VLC / mpv / ATAK / C2 system
+```
+
+### Docker Compose (Production)
+
+Add the UE5 service to `docker-compose.yml` or create a
+`docker-compose.prod.yml` overlay:
+
+```yaml
+# docker-compose.prod.yml
+services:
+  ue5:
+    image: camsim-ue5:latest
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    ipc: host
+    network_mode: host
+    environment:
+      CESIUM_ION_TOKEN: "${CESIUM_ION_TOKEN}"
+    restart: unless-stopped
+
+  sidecar:
+    # ... (from docker-compose.yml)
+    depends_on:
+      - ue5
+
+  flight-director:
+    # ... (from docker-compose.yml)
+    depends_on:
+      - ue5
+```
+
+Start everything:
+```bash
+export CESIUM_ION_TOKEN="your_token_here"
+docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up
+```
+
+### Startup Order
+
+1. **UE5** starts first — initialises Vulkan, loads Cesium terrain, begins
+   rendering and writing to shared memory.
+2. **Sidecar** starts and polls for shared memory (use `--wait-shm 120` for
+   up to 2 minutes while UE5 loads terrain tiles).
+3. **Flight director** starts sending `SetFlightState` packets immediately.
+   UE5 processes them once `CommandReceiver::BeginPlay` has bound port 5005.
+   Packets sent before that are harmlessly dropped (UDP).
+
+### Health Checks
+
+- **Sidecar**: built-in healthcheck in `docker-compose.yml` (checks
+  `/tmp/camsim_heartbeat` file mtime).
+- **Flight director**: log output shows `[flight-director] tick=N ...` every
+  5 seconds. If logs stop, the container has crashed.
+- **UE5**: check for shared memory regions:
+  ```bash
+  ls -la /dev/shm/camsim_*
+  ```
+  If both files exist and are growing, UE5 is producing frames.
+
+### Stopping
+
+```bash
+docker compose -f docker/docker-compose.yml down
+```
+
+The flight director and sidecar handle `SIGTERM` gracefully. UE5 may take a
+few seconds to flush and exit.
+
+### Running Without the Flight Director
+
+If you want UE5's built-in dead-reckoning instead of JSBSim dynamics, simply
+don't start the flight director:
+
+```bash
+# Start only sidecar (UE5 runs on host or in its own container)
+docker compose -f docker/docker-compose.yml up sidecar
+```
+
+Or stop it while other services continue:
+```bash
+docker compose -f docker/docker-compose.yml stop flight-director
+```
+
+UE5 will continue dead-reckoning at its last known heading and speed. Note
+that if the flight director was previously active (`bExternallyDriven = true`),
+the aircraft will freeze in place until UE5 is restarted.
+
+---
+
 ## Network Configuration
 
 ### Multicast (default)
@@ -371,3 +722,8 @@ Tag 18 should stop increasing at 170° despite the command still being active.
 - [ ] Gimbal limits enforced (Tag 18 stops at ±170°)
 - [ ] Headless run with Xvfb produces the same stream as desktop
 - [ ] Docker sidecar (`--ipc=host`) receives frames from host UE5 process
+- [ ] Flight director logs show changing lat/lon/heading/pitch/roll at 30 Hz
+- [ ] KLV heading/pitch/roll tags change when flight director is active
+- [ ] Aircraft stops dead-reckoning after first `SetFlightState` receipt
+- [ ] All three containers start cleanly with `docker compose up`
+- [ ] Vulkan initialises inside UE5 container (`vulkaninfo --summary`)

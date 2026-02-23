@@ -255,6 +255,11 @@ python tools/inject_commands.py set-speed --speed 150
 # Absolute gimbal position
 python tools/inject_commands.py gimbal-abs --pan 0 --tilt -45
 
+# Set full aircraft state (position + attitude + speed)
+python tools/inject_commands.py set-flight-state \
+    --lat 36.5 --lon -117.5 --alt 1500 \
+    --heading 90 --pitch 3 --roll 25 --speed 100
+
 # Ping (verify CommandReceiver is alive)
 python tools/inject_commands.py ping
 ```
