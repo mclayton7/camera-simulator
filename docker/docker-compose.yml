@@ -51,7 +51,7 @@ services:
 
     restart: unless-stopped
 
-    # Health check: verify process is running
+    # Health check: verify sidecar process is running
     healthcheck:
       test: ["CMD", "python3", "-c",
              "import os,time; s=os.stat('/tmp/camsim_heartbeat'); exit(0 if time.time()-s.st_mtime<30 else 1)"]
@@ -59,3 +59,33 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+
+  # --------------------------------------------------------------------------
+  # flight-director: JSBSim flight dynamics → UDP SetFlightState to UE5
+  # --------------------------------------------------------------------------
+  flight-director:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.flightdir
+    image: camsim-flightdir:latest
+
+    # Needs localhost access to UE5 on host
+    network_mode: host
+
+    command:
+      - "--host"
+      - "${FLIGHTDIR_HOST:-127.0.0.1}"
+      - "--port"
+      - "${FLIGHTDIR_PORT:-5005}"
+      - "--rate"
+      - "${FLIGHTDIR_RATE:-30}"
+      - "--speed"
+      - "${FLIGHTDIR_SPEED:-100}"
+      - "--heading"
+      - "${FLIGHTDIR_HEADING:-0}"
+      - "--alt-ft"
+      - "${FLIGHTDIR_ALT_FT:-5000}"
+      - "--bank-angle"
+      - "${FLIGHTDIR_BANK:-25}"
+
+    restart: unless-stopped

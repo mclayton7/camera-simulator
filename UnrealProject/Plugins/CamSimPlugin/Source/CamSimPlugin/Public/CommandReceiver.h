@@ -24,8 +24,9 @@ enum class ECamSimCmd : uint8
     SetPosition  = 0x04, // double lat_deg, double lon_deg, float alt_m_hae
     SetHeading   = 0x05, // float heading_deg
     SetSpeed     = 0x06, // float speed_kts
-    SetGimbalAbs = 0x07, // float pan_deg, float tilt_deg
-    Ping         = 0xFF, // no payload
+    SetGimbalAbs   = 0x07, // float pan_deg, float tilt_deg
+    SetFlightState = 0x08, // double lat, double lon, float alt_m, float heading, float pitch, float roll, float speed_kts
+    Ping           = 0xFF, // no payload
 };
 
 /**

@@ -105,6 +105,9 @@ public:
     void HandleSetPosition(double LatDeg, double LonDeg, float AltMHAE);
     void HandleSetHeading(float HeadingDeg);
     void HandleSetSpeed(float SpeedKts);
+    void HandleSetFlightState(double LatDeg, double LonDeg, float AltMHAE,
+                              float HeadingDeg, float PitchDeg, float RollDeg,
+                              float SpeedKts);
 
 protected:
     virtual void BeginPlay() override;
@@ -114,6 +117,9 @@ private:
     /** Cached reference to the CesiumGeoreference actor in the level */
     UPROPERTY()
     TObjectPtr<ACesiumGeoreference> CesiumGeoreference;
+
+    /** When true, AdvancePosition() is skipped — an external flight director owns position. */
+    bool bExternallyDriven = false;
 
     /** Advance lat/lon by DeltaTime seconds at current heading + speed */
     void AdvancePosition(float DeltaTime);

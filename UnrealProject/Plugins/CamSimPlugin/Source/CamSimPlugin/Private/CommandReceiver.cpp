@@ -194,6 +194,20 @@ void UCommandReceiver::DispatchCommand(ECamSimCmd Type, const uint8* Payload, ui
             GimbalTarget->SetAbsolutePosition(ReadF32LE(Payload), ReadF32LE(Payload + 4));
         break;
 
+    case ECamSimCmd::SetFlightState:
+        if (PayloadLen >= 36 && AircraftTarget)
+        {
+            double Lat     = ReadF64LE(Payload);
+            double Lon     = ReadF64LE(Payload + 8);
+            float  Alt     = ReadF32LE(Payload + 16);
+            float  Heading = ReadF32LE(Payload + 20);
+            float  Pitch   = ReadF32LE(Payload + 24);
+            float  Roll    = ReadF32LE(Payload + 28);
+            float  Speed   = ReadF32LE(Payload + 32);
+            AircraftTarget->HandleSetFlightState(Lat, Lon, Alt, Heading, Pitch, Roll, Speed);
+        }
+        break;
+
     case ECamSimCmd::Ping:
         UE_LOG(LogTemp, Verbose, TEXT("CamSim CommandReceiver: Ping received"));
         break;

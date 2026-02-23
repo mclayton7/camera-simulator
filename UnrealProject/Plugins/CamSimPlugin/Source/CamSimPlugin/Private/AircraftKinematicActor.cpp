@@ -86,7 +86,10 @@ void AAircraftKinematicActor::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
 
-    AdvancePosition(DeltaTime);
+    if (!bExternallyDriven)
+    {
+        AdvancePosition(DeltaTime);
+    }
     SyncWorldTransform();
 }
 
@@ -110,6 +113,21 @@ void AAircraftKinematicActor::HandleSetHeading(float HeadingDeg)
 void AAircraftKinematicActor::HandleSetSpeed(float InSpeedKts)
 {
     SpeedKts = InSpeedKts;
+}
+
+void AAircraftKinematicActor::HandleSetFlightState(
+    double LatDeg, double LonDeg, float AltMHAE,
+    float HeadingDeg, float PitchDeg, float RollDeg, float InSpeedKts)
+{
+    CurrentLatDeg      = LatDeg;
+    CurrentLonDeg      = LonDeg;
+    CurrentAltMHAE     = static_cast<double>(AltMHAE);
+    CurrentHeadingDeg  = FMath::Fmod(HeadingDeg, 360.0f);
+    if (CurrentHeadingDeg < 0.0f) CurrentHeadingDeg += 360.0f;
+    PlatformPitchDeg   = PitchDeg;
+    PlatformRollDeg    = RollDeg;
+    SpeedKts           = InSpeedKts;
+    bExternallyDriven  = true;
 }
 
 // ---------------------------------------------------------------------------

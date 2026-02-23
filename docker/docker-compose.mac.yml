@@ -104,6 +104,34 @@ services:
       retries: 3
       start_period: 20s
 
+  # --------------------------------------------------------------------------
+  # flight-director: JSBSim flight dynamics → UDP SetFlightState
+  # Optional on macOS (frame-gen already has JSBSim built-in).
+  # Opt-in with: docker compose --profile flightdir up
+  # --------------------------------------------------------------------------
+  flight-director:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.flightdir
+    image: camsim-flightdir:latest
+
+    command:
+      - "--host"
+      - "${FLIGHTDIR_HOST:-host.docker.internal}"
+      - "--port"
+      - "${FLIGHTDIR_PORT:-5005}"
+      - "--rate"
+      - "${FLIGHTDIR_RATE:-30}"
+      - "--speed"
+      - "${FLIGHTDIR_SPEED:-100}"
+      - "--heading"
+      - "${FLIGHTDIR_HEADING:-0}"
+
+    restart: unless-stopped
+
+    profiles:
+      - flightdir
+
 # --------------------------------------------------------------------------
 # Shared tmpfs: stands in for the host /dev/shm that --ipc=host would give
 # on Linux.  Both containers see the same POSIX shm files here.
