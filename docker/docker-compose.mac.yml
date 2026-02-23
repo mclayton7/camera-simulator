@@ -3,6 +3,8 @@
 # Two services:
 #   frame-gen  Writes synthetic BGRA colour-bar frames + fake telemetry to a
 #              shared tmpfs at /dev/shm, mimicking the UE5 CamSimPlugin.
+#              Uses JSBSim 6-DOF flight dynamics (Cessna 172) for realistic
+#              aircraft state (banking turns, altitude hold, heading changes).
 #   sidecar    Reads from /dev/shm, encodes with x264enc (software), and sends
 #              a unicast MPEG-TS + KLV stream to the host machine.
 #
@@ -13,8 +15,9 @@
 # Usage:
 #   docker compose -f docker/docker-compose.mac.yml up --build
 #
-# Override resolution / fps:
+# Override resolution / fps / flight params:
 #   FRAME_WIDTH=1920 FRAME_HEIGHT=1080 docker compose -f docker/docker-compose.mac.yml up
+#   FRAME_SPEED=120 FRAME_HEADING=90 docker compose -f docker/docker-compose.mac.yml up
 #
 # Note: --network=host is not supported on macOS Docker Desktop.
 # The sidecar sends UDP unicast to host.docker.internal (the Mac host).
@@ -41,6 +44,10 @@ services:
       - "${FRAME_HEIGHT:-720}"
       - "--fps"
       - "${FRAME_FPS:-30}"
+      - "--speed"
+      - "${FRAME_SPEED:-100}"
+      - "--heading"
+      - "${FRAME_HEADING:-0}"
 
     restart: unless-stopped
 

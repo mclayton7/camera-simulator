@@ -2,6 +2,7 @@
 #
 # Lightweight container that writes synthetic BGRA frames + telemetry to
 # POSIX shared memory, mimicking the Unreal Engine CamSimPlugin.
+# Includes JSBSim 6-DOF flight dynamics for realistic aircraft state.
 # Used in place of UE5 on macOS / CI / machines without a GPU.
 #
 # Build:
@@ -12,7 +13,7 @@
 
 FROM python:3.12-slim
 
-RUN pip install --no-cache-dir --break-system-packages posix-ipc
+RUN pip install --no-cache-dir --break-system-packages posix-ipc jsbsim
 
 WORKDIR /app
 COPY tools/frame_gen.py .

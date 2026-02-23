@@ -6,11 +6,16 @@ Mimics the Unreal Engine CamSimPlugin: creates the two POSIX shared memory
 regions (camsim_frames, camsim_telemetry) and writes synthetic BGRA colour-bar
 frames + fake aircraft telemetry at the target frame rate.
 
+When JSBSim is available (default), uses a full 6-DOF flight dynamics model
+(Cessna 172) flying a banked surveillance orbit for realistic aircraft state.
+Falls back to simple synthetic telemetry with --no-jsbsim or if JSBSim is not
+installed.
+
 Run this inside the 'frame-gen' Docker service alongside the sidecar to get a
 full end-to-end MPEG-TS + KLV stream without Unreal Engine installed.
 
 Dependencies:
-    pip install posix-ipc
+    pip install posix-ipc jsbsim
 """
 
 from __future__ import annotations
@@ -21,9 +26,17 @@ import math
 import mmap
 import os
 import signal
+import sys
 import time
 
 import posix_ipc  # pip install posix-ipc
+
+# Optional — graceful fallback when JSBSim is not installed
+try:
+    import jsbsim
+    _HAS_JSBSIM = True
+except ImportError:
+    _HAS_JSBSIM = False
 
 
 # ---------------------------------------------------------------------------
@@ -35,6 +48,9 @@ CAMSIM_SHM_MAGIC       = 0x43534D46  # 'CSMF'
 CAMSIM_TELEMETRY_MAGIC = 0x43534D54  # 'CSMT'
 FRAME_SLOTS            = 3
 BYTES_PER_PIXEL        = 4           # BGRA
+
+_FT_TO_M    = 0.3048
+_RAD_TO_DEG = 180.0 / math.pi
 
 
 class _FrameHeader(ctypes.Structure):
@@ -215,37 +231,141 @@ def _init_telemetry_shm() -> mmap.mmap:
 
 
 # ---------------------------------------------------------------------------
-# Synthetic telemetry (fixed position, slowly turning aircraft + panning gimbal)
+# Simple synthetic telemetry (fallback when JSBSim is unavailable)
 # ---------------------------------------------------------------------------
 
-_AIRCRAFT_LAT  = 36.5     # Death Valley, CA — same default as AircraftKinematicActor
-_AIRCRAFT_LON  = -117.5
-_AIRCRAFT_ALT  = 1500.0   # m HAE
 _GIMBAL_EL     = -45.0    # deg (negative = looking down)
 _HFOV          = 18.0     # degrees
 _VFOV          = 10.0     # degrees
 
 
-def _build_telemetry(seq: int, elapsed: float) -> _TelemetryFrame:
+def _build_telemetry_simple(seq: int, elapsed: float,
+                            lat: float, lon: float, alt_m: float,
+                            az_deg: float) -> _TelemetryFrame:
     heading_deg = (elapsed * 3.0) % 360.0   # 3 deg/s slow turn
-    az_deg      = (elapsed * 5.0) % 360.0   # 5 deg/s gimbal pan
 
-    slant_m  = _AIRCRAFT_ALT / math.cos(math.radians(abs(_GIMBAL_EL)))
+    slant_m  = alt_m / math.cos(math.radians(abs(_GIMBAL_EL)))
     horiz_m  = slant_m * math.cos(math.radians(_GIMBAL_EL))
-    fc_lat   = _AIRCRAFT_LAT + math.degrees(horiz_m / 6_378_137.0)
-    fc_lon   = _AIRCRAFT_LON
+    fc_lat   = lat + math.degrees(horiz_m / 6_378_137.0)
+    fc_lon   = lon
 
     f = _TelemetryFrame()
     f.timestamp_us         = int(time.time() * 1_000_000)
-    f.platform_lat_deg     = _AIRCRAFT_LAT
-    f.platform_lon_deg     = _AIRCRAFT_LON
-    f.platform_alt_m_hae   = _AIRCRAFT_ALT
+    f.platform_lat_deg     = lat
+    f.platform_lon_deg     = lon
+    f.platform_alt_m_hae   = alt_m
     f.platform_heading_deg = heading_deg
     f.platform_pitch_deg   = 0.0
     f.platform_roll_deg    = 0.0
-    f.sensor_lat_deg       = _AIRCRAFT_LAT
-    f.sensor_lon_deg       = _AIRCRAFT_LON
-    f.sensor_alt_m_hae     = _AIRCRAFT_ALT
+    f.sensor_lat_deg       = lat
+    f.sensor_lon_deg       = lon
+    f.sensor_alt_m_hae     = alt_m
+    f.sensor_rel_az_deg    = az_deg
+    f.sensor_rel_el_deg    = _GIMBAL_EL
+    f.sensor_rel_roll_deg  = 0.0
+    f.hfov_deg             = _HFOV
+    f.vfov_deg             = _VFOV
+    f.slant_range_m        = slant_m
+    f.frame_center_lat_deg = fc_lat
+    f.frame_center_lon_deg = fc_lon
+    f.frame_center_elev_m  = 0.0
+    f.sequence             = seq
+    return f
+
+
+# ---------------------------------------------------------------------------
+# JSBSim 6-DOF flight dynamics
+# ---------------------------------------------------------------------------
+
+def _init_jsbsim(aircraft: str, lat: float, lon: float, alt_ft: float,
+                 heading: float, speed_kts: float) -> "jsbsim.FGFDMExec":
+    """Initialize JSBSim FDM and trim for steady level flight."""
+    fdm = jsbsim.FGFDMExec(jsbsim.get_default_root_dir())
+    fdm.set_debug_lvl(0)
+    fdm.load_model(aircraft)
+    fdm.set_dt(1.0 / 120.0)  # 120 Hz internal physics rate
+
+    # Initial conditions
+    fdm["ic/lat-geod-deg"] = lat
+    fdm["ic/long-gc-deg"] = lon
+    fdm["ic/h-sl-ft"] = alt_ft
+    fdm["ic/psi-true-deg"] = heading
+    fdm["ic/vc-kts"] = speed_kts
+    fdm["ic/gamma-deg"] = 0.0  # level flight
+    fdm.run_ic()
+
+    # Trim for steady level flight
+    try:
+        fdm.do_trim(1)  # tFull
+        print("[frame-gen] JSBSim trim succeeded", flush=True)
+    except RuntimeError:
+        print("[frame-gen] JSBSim trim failed — using raw IC state", flush=True)
+
+    return fdm
+
+
+def _update_orbit_controller(fdm: "jsbsim.FGFDMExec",
+                             target_bank_deg: float,
+                             target_alt_ft: float,
+                             target_speed_kts: float) -> None:
+    """Simple proportional controller for a banked surveillance orbit."""
+    # Current state
+    bank_rad = fdm["attitude/phi-rad"]
+    bank_deg = bank_rad * _RAD_TO_DEG
+    alt_ft = fdm["position/h-sl-ft"]
+    vc_kts = fdm["velocities/vc-kts"]
+    beta_rad = fdm["aero/beta-rad"]
+    pitch_rate = fdm["velocities/q-rad_sec"]
+
+    # Aileron: P-control on bank angle error
+    bank_err = target_bank_deg - bank_deg
+    aileron = max(-1.0, min(1.0, bank_err * 0.01))
+    fdm["fcs/aileron-cmd-norm"] = aileron
+
+    # Elevator: P-control on altitude error + pitch rate damping
+    alt_err = target_alt_ft - alt_ft
+    elevator = max(-1.0, min(1.0, alt_err * 0.001 - pitch_rate * 0.5))
+    fdm["fcs/elevator-cmd-norm"] = elevator
+
+    # Throttle: P-control on airspeed error
+    speed_err = target_speed_kts - vc_kts
+    throttle = max(0.0, min(1.0, 0.6 + speed_err * 0.02))
+    fdm["fcs/throttle-cmd-norm"] = throttle
+
+    # Rudder: P-control on sideslip for coordinated turn
+    rudder = max(-1.0, min(1.0, -beta_rad * 2.0))
+    fdm["fcs/rudder-cmd-norm"] = rudder
+
+
+def _build_telemetry_jsbsim(fdm: "jsbsim.FGFDMExec", seq: int,
+                            az_deg: float) -> _TelemetryFrame:
+    """Build telemetry frame from current JSBSim state."""
+    lat = fdm["position/lat-geod-deg"]
+    lon = fdm["position/long-gc-deg"]
+    alt_m = fdm["position/h-sl-ft"] * _FT_TO_M
+    heading_deg = fdm["attitude/psi-true-rad"] * _RAD_TO_DEG
+    pitch_deg = fdm["attitude/theta-rad"] * _RAD_TO_DEG
+    roll_deg = fdm["attitude/phi-rad"] * _RAD_TO_DEG
+
+    # Normalize heading to [0, 360)
+    heading_deg = heading_deg % 360.0
+
+    slant_m = alt_m / math.cos(math.radians(abs(_GIMBAL_EL)))
+    horiz_m = slant_m * math.cos(math.radians(_GIMBAL_EL))
+    fc_lat = lat + math.degrees(horiz_m / 6_378_137.0)
+    fc_lon = lon
+
+    f = _TelemetryFrame()
+    f.timestamp_us         = int(time.time() * 1_000_000)
+    f.platform_lat_deg     = lat
+    f.platform_lon_deg     = lon
+    f.platform_alt_m_hae   = alt_m
+    f.platform_heading_deg = heading_deg
+    f.platform_pitch_deg   = pitch_deg
+    f.platform_roll_deg    = roll_deg
+    f.sensor_lat_deg       = lat
+    f.sensor_lon_deg       = lon
+    f.sensor_alt_m_hae     = alt_m
     f.sensor_rel_az_deg    = az_deg
     f.sensor_rel_el_deg    = _GIMBAL_EL
     f.sensor_rel_roll_deg  = 0.0
@@ -264,10 +384,39 @@ def _build_telemetry(seq: int, elapsed: float) -> _TelemetryFrame:
 # ---------------------------------------------------------------------------
 
 def run(args: argparse.Namespace) -> None:
+    use_jsbsim = not args.no_jsbsim and _HAS_JSBSIM
+    if args.no_jsbsim:
+        print("[frame-gen] JSBSim disabled via --no-jsbsim", flush=True)
+    elif not _HAS_JSBSIM:
+        print("[frame-gen] WARNING: jsbsim not installed — using simple mode",
+              flush=True)
+
     print(
-        f"[frame-gen] {args.width}x{args.height} @ {args.fps} fps",
+        f"[frame-gen] {args.width}x{args.height} @ {args.fps} fps"
+        f"  mode={'jsbsim' if use_jsbsim else 'simple'}",
         flush=True,
     )
+
+    # JSBSim initialization
+    fdm = None
+    if use_jsbsim:
+        alt_m = args.alt_ft * _FT_TO_M
+        fdm = _init_jsbsim(
+            aircraft=args.aircraft,
+            lat=args.lat,
+            lon=args.lon,
+            alt_ft=args.alt_ft,
+            heading=args.heading,
+            speed_kts=args.speed,
+        )
+        jsbsim_steps_per_frame = math.ceil(120.0 / args.fps)
+        print(
+            f"[frame-gen] JSBSim: {args.aircraft} at {args.lat:.4f},"
+            f" {args.lon:.4f}  alt={args.alt_ft} ft"
+            f"  speed={args.speed} kts  bank={args.bank_angle}°"
+            f"  ({jsbsim_steps_per_frame} physics steps/frame)",
+            flush=True,
+        )
 
     frame_mm, hdr_size, slot_stride = _init_frame_shm(args.width, args.height)
     tel_mm                          = _init_telemetry_shm()
@@ -295,6 +444,9 @@ def run(args: argparse.Namespace) -> None:
     next_frame_t = time.monotonic()
     last_log_t   = time.monotonic()
 
+    # Gimbal state (same for both modes)
+    gimbal_az_deg = 0.0
+
     while running:
         sleep_t = next_frame_t - time.monotonic()
         if sleep_t > 0:
@@ -302,6 +454,19 @@ def run(args: argparse.Namespace) -> None:
 
         elapsed   = time.time() - start_time
         bar_shift = int(elapsed)  # rotate bars once per second
+
+        # Gimbal pan: 5 deg/s
+        gimbal_az_deg = (elapsed * 5.0) % 360.0
+
+        # ----------------------------------------------------------------
+        # Step JSBSim physics (if enabled)
+        # ----------------------------------------------------------------
+        if fdm is not None:
+            for _ in range(jsbsim_steps_per_frame):
+                _update_orbit_controller(
+                    fdm, args.bank_angle, args.alt_ft, args.speed,
+                )
+                fdm.run()
 
         # ----------------------------------------------------------------
         # Video frame → camsim_frames slot
@@ -337,7 +502,14 @@ def run(args: argparse.Namespace) -> None:
         tel_hdr.write_slot ^= 1
         write_off = tel_base + tel_hdr.write_slot * tel_slot_size
 
-        new_tel = _build_telemetry(seq, elapsed)
+        if fdm is not None:
+            new_tel = _build_telemetry_jsbsim(fdm, seq, gimbal_az_deg)
+        else:
+            new_tel = _build_telemetry_simple(
+                seq, elapsed, args.lat, args.lon,
+                args.alt_ft * _FT_TO_M, gimbal_az_deg,
+            )
+
         ctypes.memmove(
             ctypes.addressof(_TelemetryFrame.from_buffer(tel_mm, write_off)),
             ctypes.addressof(new_tel),
@@ -357,6 +529,9 @@ def run(args: argparse.Namespace) -> None:
             print(
                 f"[frame-gen] seq={seq}  fps≈{actual_fps:.1f}"
                 f"  heading={new_tel.platform_heading_deg:.1f}°"
+                f"  pitch={new_tel.platform_pitch_deg:.1f}°"
+                f"  roll={new_tel.platform_roll_deg:.1f}°"
+                f"  alt={new_tel.platform_alt_m_hae:.0f}m"
                 f"  az={new_tel.sensor_rel_az_deg:.1f}°",
                 flush=True,
             )
@@ -383,6 +558,23 @@ def main() -> None:
                    help="Frame height in pixels (default: %(default)s)")
     p.add_argument("--fps",    type=int, default=30,
                    help="Target frame rate (default: %(default)s)")
+    # JSBSim flight dynamics arguments
+    p.add_argument("--aircraft", type=str, default="c172p",
+                   help="JSBSim aircraft model (default: %(default)s)")
+    p.add_argument("--speed", type=float, default=100,
+                   help="Initial calibrated airspeed in knots (default: %(default)s)")
+    p.add_argument("--heading", type=float, default=0,
+                   help="Initial true heading in degrees (default: %(default)s)")
+    p.add_argument("--lat", type=float, default=36.5,
+                   help="Initial latitude in degrees (default: %(default)s)")
+    p.add_argument("--lon", type=float, default=-117.5,
+                   help="Initial longitude in degrees (default: %(default)s)")
+    p.add_argument("--alt-ft", type=float, default=5000,
+                   help="Initial altitude in feet MSL (default: %(default)s)")
+    p.add_argument("--bank-angle", type=float, default=25,
+                   help="Target bank angle for orbit in degrees (default: %(default)s)")
+    p.add_argument("--no-jsbsim", action="store_true",
+                   help="Disable JSBSim; use simple synthetic telemetry")
     run(p.parse_args())
 
 
