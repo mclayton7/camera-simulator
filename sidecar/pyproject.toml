@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "camsim-sidecar"
@@ -13,6 +13,9 @@ dependencies = [
     #   apt install python3-gst-1.0  (Debian/Ubuntu)
     #   brew install gstreamer pygobject3  (macOS)
 ]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
 
 [project.scripts]
 camsim-sidecar = "camsim_sidecar.main:main"

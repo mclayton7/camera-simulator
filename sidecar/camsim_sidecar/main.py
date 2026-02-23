@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import signal
 import sys
 import time
@@ -165,6 +166,13 @@ def run(args: argparse.Namespace):
                 log.info("Running: %.1f fps, frame seq=%d", fps_actual, seq)
                 frame_count  = 0
                 last_stat_t  = now
+
+                # Touch heartbeat file for Docker healthcheck
+                try:
+                    with open("/tmp/camsim_heartbeat", "w") as f:
+                        f.write(str(os.getpid()))
+                except OSError:
+                    pass
 
     finally:
         frame_reader.close()

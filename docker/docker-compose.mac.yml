@@ -1,0 +1,111 @@
+# CamSim — macOS development stack (no Unreal Engine, no NVIDIA GPU)
+#
+# Two services:
+#   frame-gen  Writes synthetic BGRA colour-bar frames + fake telemetry to a
+#              shared tmpfs at /dev/shm, mimicking the UE5 CamSimPlugin.
+#   sidecar    Reads from /dev/shm, encodes with x264enc (software), and sends
+#              a unicast MPEG-TS + KLV stream to the host machine.
+#
+# Receive the stream on your Mac:
+#   vlc --demux=ts "udp://@:5004"
+#   python tools/recv_and_inspect.py --host 0.0.0.0 --port 5004
+#
+# Usage:
+#   docker compose -f docker/docker-compose.mac.yml up --build
+#
+# Override resolution / fps:
+#   FRAME_WIDTH=1920 FRAME_HEIGHT=1080 docker compose -f docker/docker-compose.mac.yml up
+#
+# Note: --network=host is not supported on macOS Docker Desktop.
+# The sidecar sends UDP unicast to host.docker.internal (the Mac host).
+
+services:
+
+  # --------------------------------------------------------------------------
+  # frame-gen: synthetic frame producer
+  # --------------------------------------------------------------------------
+  frame-gen:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.framegen
+    image: camsim-framegen:latest
+
+    # Mount the shared tmpfs so frame-gen can write POSIX shm files
+    volumes:
+      - shm-data:/dev/shm
+
+    command:
+      - "--width"
+      - "${FRAME_WIDTH:-1280}"
+      - "--height"
+      - "${FRAME_HEIGHT:-720}"
+      - "--fps"
+      - "${FRAME_FPS:-30}"
+
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # sidecar: GStreamer MPEG-TS encoder + KLV muxer
+  # --------------------------------------------------------------------------
+  sidecar:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.sidecar
+    image: camsim-sidecar:latest
+
+    # Same tmpfs as frame-gen so the sidecar can read the POSIX shm files
+    volumes:
+      - shm-data:/dev/shm
+
+    environment:
+      GST_DEBUG: "${GST_DEBUG:-2}"
+
+    command:
+      # Send unicast UDP to the Mac host (host.docker.internal resolves on
+      # macOS Docker Desktop).  Receive with: vlc udp://@localhost:5004
+      - "--host"
+      - "${CAMSIM_HOST:-host.docker.internal}"
+      - "--port"
+      - "${CAMSIM_PORT:-5004}"
+      # Match the resolution produced by frame-gen
+      - "--width"
+      - "${FRAME_WIDTH:-1280}"
+      - "--height"
+      - "${FRAME_HEIGHT:-720}"
+      # Force software encoder — no NVIDIA GPU on macOS
+      - "--software"
+      # Unicast, not multicast (--network=host is unavailable on macOS)
+      - "--no-multicast"
+      # Wait up to 30 s for frame-gen to create the shm regions
+      - "--wait-shm"
+      - "30"
+      - "--bitrate"
+      - "${CAMSIM_BITRATE:-4000}"
+      - "--log-level"
+      - "${CAMSIM_LOG_LEVEL:-INFO}"
+
+    depends_on:
+      - frame-gen
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import os,time; s=os.stat('/tmp/camsim_heartbeat'); exit(0 if time.time()-s.st_mtime<30 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+# --------------------------------------------------------------------------
+# Shared tmpfs: stands in for the host /dev/shm that --ipc=host would give
+# on Linux.  Both containers see the same POSIX shm files here.
+# --------------------------------------------------------------------------
+volumes:
+  shm-data:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      # 128 MB covers 1920×1080 BGRA (3 slots × 1920×1080×4 ≈ 24 MB) + telemetry.
+      o: "size=128m,mode=1777"

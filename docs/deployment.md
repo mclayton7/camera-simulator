@@ -97,7 +97,114 @@ DISPLAY_NUM=100 ./scripts/run_headless.sh
 
 ---
 
-## Docker (Sidecar Only)
+## macOS (Docker, No Unreal Engine)
+
+A self-contained Docker Compose stack that runs the full pipeline on macOS
+without Unreal Engine or a GPU. A synthetic frame generator (`frame-gen`)
+writes colour-bar BGRA frames and fake telemetry to shared memory; the
+sidecar reads them, encodes with `x264enc`, and sends MPEG-TS + KLV over UDP
+to the host.
+
+### Prerequisites
+
+- [Docker Desktop for Mac](https://www.docker.com/products/docker-desktop/) (4.x+)
+
+That's it — no Unreal Engine, GStreamer, Python, or posix-ipc needed on the host.
+
+### Quick Start
+
+```bash
+docker compose -f docker/docker-compose.mac.yml up --build
+```
+
+This builds two images and starts two containers:
+
+| Service | Image | Role |
+|---------|-------|------|
+| `frame-gen` | `camsim-framegen` | Writes synthetic BGRA frames + telemetry to `/dev/shm` |
+| `sidecar` | `camsim-sidecar` | Reads from `/dev/shm`, encodes H.264 + KLV, sends MPEG-TS/UDP |
+
+Both containers share a tmpfs volume mounted at `/dev/shm` (stands in for
+`--ipc=host`, which is not supported on macOS Docker Desktop).
+
+### Receive the Stream
+
+```bash
+# Video player
+vlc --demux=ts "udp://@:5004"
+
+# Inspect TS packets + KLV tags
+python tools/recv_and_inspect.py --host 0.0.0.0 --port 5004
+```
+
+The sidecar sends unicast UDP to `host.docker.internal` (the macOS host IP
+inside Docker Desktop). Multicast is not available in this mode.
+
+### Override Resolution / FPS
+
+```bash
+FRAME_WIDTH=1920 FRAME_HEIGHT=1080 FRAME_FPS=24 \
+  docker compose -f docker/docker-compose.mac.yml up --build
+```
+
+### Override Destination / Bitrate
+
+```bash
+CAMSIM_PORT=6000 CAMSIM_BITRATE=8000 \
+  docker compose -f docker/docker-compose.mac.yml up
+```
+
+### All Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FRAME_WIDTH` | `1280` | Frame width in pixels |
+| `FRAME_HEIGHT` | `720` | Frame height in pixels |
+| `FRAME_FPS` | `30` | Target frame rate |
+| `CAMSIM_HOST` | `host.docker.internal` | UDP destination host |
+| `CAMSIM_PORT` | `5004` | UDP destination port |
+| `CAMSIM_BITRATE` | `4000` | H.264 bitrate in kbps |
+| `CAMSIM_LOG_LEVEL` | `INFO` | Sidecar log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
+| `GST_DEBUG` | `2` | GStreamer log level (0–9) |
+
+### Stopping
+
+```bash
+docker compose -f docker/docker-compose.mac.yml down
+```
+
+Add `-v` to also remove the shared tmpfs volume:
+
+```bash
+docker compose -f docker/docker-compose.mac.yml down -v
+```
+
+### Troubleshooting
+
+**"Telemetry SHM magic mismatch"** — The sidecar mapped a stale or wrong
+shared memory region. Run `docker compose down -v` to clear the tmpfs volume,
+then `up` again.
+
+**"Shared memory /camsim_frames did not appear within 30 s"** — The
+`frame-gen` container failed to start. Check its logs:
+```bash
+docker compose -f docker/docker-compose.mac.yml logs frame-gen
+```
+
+**VLC shows nothing** — Ensure VLC is listening on the correct port
+(`udp://@localhost:5004`). The `@` is required for VLC to bind as a listener.
+Also verify Docker Desktop is running and the containers are healthy:
+```bash
+docker compose -f docker/docker-compose.mac.yml ps
+```
+
+**Low FPS / stuttering** — Docker Desktop runs inside a Linux VM with limited
+CPU. Try reducing resolution (`FRAME_WIDTH=640 FRAME_HEIGHT=480`) or increasing
+Docker Desktop's CPU/memory allocation in Settings → Resources.
+
+---
+
+## Docker (Sidecar Only — Linux with UE5)
 
 The Dockerfile packages only the Python sidecar. The Unreal Engine process runs
 on the host (or in a GPU-capable VM) and communicates via POSIX shared memory.
@@ -166,7 +273,7 @@ To cross router hops, add `ttl=4` to the udpsink properties in `pipeline.py`.
 Multicast reception:
 ```bash
 # VLC
-vlc udp://@239.1.1.1:5004
+vlc --demux=ts "udp://@239.1.1.1:5004"
 
 # mpv
 mpv udp://239.1.1.1:5004
@@ -211,7 +318,7 @@ Expected output after 5 seconds:
 ### Step 2 — Video decodes in VLC
 
 ```bash
-vlc udp://@239.1.1.1:5004
+vlc --demux=ts "udp://@239.1.1.1:5004"
 ```
 
 Expect live video of the terrain with the camera looking downward at a 45°

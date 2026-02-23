@@ -1,0 +1,21 @@
+# CamSim synthetic frame generator image
+#
+# Lightweight container that writes synthetic BGRA frames + telemetry to
+# POSIX shared memory, mimicking the Unreal Engine CamSimPlugin.
+# Used in place of UE5 on macOS / CI / machines without a GPU.
+#
+# Build:
+#   docker build -f docker/Dockerfile.framegen -t camsim-framegen .
+#
+# Run (via docker-compose.mac.yml — shares /dev/shm with the sidecar):
+#   docker compose -f docker/docker-compose.mac.yml up
+
+FROM python:3.12-slim
+
+RUN pip install --no-cache-dir --break-system-packages posix-ipc
+
+WORKDIR /app
+COPY tools/frame_gen.py .
+
+ENTRYPOINT ["python3", "frame_gen.py"]
+CMD ["--width", "1280", "--height", "720", "--fps", "30"]

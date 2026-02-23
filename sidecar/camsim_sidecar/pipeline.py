@@ -218,13 +218,49 @@ class CamSimPipeline:
         """
         Set video PID to 0x0100 and KLV PID to 0x0201 on the mpegtsmux pads.
         Must be called after start() while pipeline is in PLAYING state.
+
+        Waits briefly for pad caps to be negotiated, then sets PIDs if the
+        GStreamer version supports per-pad pid/stream-type properties (>= 1.22).
         """
+        import gi
+        gi.require_version("Gst", "1.0")
+        from gi.repository import Gst  # type: ignore
+
         if not self._pipeline:
+            return
+
+        gst_ver = Gst.version()
+        gst_ver_tuple = (gst_ver.major, gst_ver.minor)
+        log.info("GStreamer version: %d.%d.%d.%d", *gst_ver)
+
+        if gst_ver_tuple < (1, 22):
+            log.warning(
+                "GStreamer %d.%d < 1.22 — per-pad PID properties not supported; "
+                "PIDs will be auto-assigned by mpegtsmux",
+                *gst_ver_tuple,
+            )
             return
 
         mux = self._pipeline.get_by_name("mux")
         if not mux:
             return
+
+        # Wait for pad caps to negotiate (up to 2 s)
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            pads_with_caps = sum(
+                1 for pad in mux.pads if pad.get_current_caps() is not None
+            )
+            # We expect at least 2 sink pads (video + klv) with caps
+            if pads_with_caps >= 2:
+                break
+            time.sleep(0.05)
+        else:
+            log.warning(
+                "Timed out waiting for mpegtsmux pad caps; "
+                "only %d pad(s) have caps — PID assignment may be incomplete",
+                pads_with_caps,
+            )
 
         for pad in mux.pads:
             caps = pad.get_current_caps()
@@ -233,9 +269,14 @@ class CamSimPipeline:
             struct = caps.get_structure(0)
             mime = struct.get_name() if struct else ""
 
-            if "video" in mime or "x-h264" in mime:
-                pad.set_property("pid", self.video_pid)
-            elif "klv" in mime:
-                pad.set_property("pid", self.klv_pid)
-                # KLV data stream: stream_type 0x15
-                pad.set_property("stream-type", 0x15)
+            try:
+                if "video" in mime or "x-h264" in mime:
+                    pad.set_property("pid", self.video_pid)
+                    log.info("Video pad PID set to 0x%04x", self.video_pid)
+                elif "klv" in mime:
+                    pad.set_property("pid", self.klv_pid)
+                    pad.set_property("stream-type", 0x15)
+                    log.info("KLV pad PID set to 0x%04x (stream-type 0x15)", self.klv_pid)
+            except TypeError as exc:
+                log.warning("Could not configure mpegtsmux pad PID (%s): %s",
+                            mime, exc)

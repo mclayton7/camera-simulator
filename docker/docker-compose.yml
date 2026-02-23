@@ -1,5 +1,3 @@
-version: "3.9"
-
 # CamSim docker-compose
 #
 # Services:
@@ -55,8 +53,9 @@ services:
 
     # Health check: verify process is running
     healthcheck:
-      test: ["CMD", "python3", "-c", "import camsim_sidecar"]
+      test: ["CMD", "python3", "-c",
+             "import os,time; s=os.stat('/tmp/camsim_heartbeat'); exit(0 if time.time()-s.st_mtime<30 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 20s

@@ -217,7 +217,7 @@ python -m camsim_sidecar \
 
 ```bash
 # VLC (with KLV metadata display if plugin installed)
-vlc udp://@239.1.1.1:5004
+vlc --demux=ts "udp://@239.1.1.1:5004"
 
 # mpv (video only)
 mpv udp://239.1.1.1:5004

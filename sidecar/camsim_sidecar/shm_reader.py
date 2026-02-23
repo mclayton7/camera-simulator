@@ -12,9 +12,7 @@ from __future__ import annotations
 import ctypes
 import mmap
 import os
-import struct
 import time
-from pathlib import Path
 
 from .klv_encoder import TelemetryData
 
@@ -48,7 +46,8 @@ class _FrameHeader(ctypes.Structure):
 
 
 class _FrameSlot(ctypes.Structure):
-    _pack_ = 1
+    # Natural alignment: c_uint64 aligns to 8, adding 4 implicit bytes after
+    # height. Total = 32 bytes, matching ShmFrameSlot in SharedMemoryTypes.h.
     _fields_ = [
         ("sequence",     ctypes.c_uint32),
         ("width",        ctypes.c_uint32),
@@ -70,7 +69,9 @@ class _TelemetryHeader(ctypes.Structure):
 
 
 class _TelemetryFrame(ctypes.Structure):
-    _pack_ = 1
+    # Natural alignment: two 4-byte implicit pads (before sensor_lat_deg and
+    # frame_center_lat_deg) plus 4-byte struct trailing pad → 128 bytes,
+    # matching TelemetryFrame in SharedMemoryTypes.h.
     _fields_ = [
         ("timestamp_us",          ctypes.c_uint64),
         ("platform_lat_deg",      ctypes.c_double),
@@ -126,15 +127,11 @@ class FrameShmReader:
 
     def open(self) -> "FrameShmReader":
         """Open (or wait for) the shared memory region."""
-        shm_path = f"/dev/shm/{self._shm_name}"  # Linux
-        if not os.path.exists(shm_path):
-            # macOS: try /tmp
-            shm_path = f"/tmp/{self._shm_name}"
-
         import posix_ipc  # type: ignore
         memory = posix_ipc.SharedMemory(f"/{self._shm_name}", flags=0)
         self._fd = memory.fd
-        memory.close_fd()  # we keep the fd open via mmap
+        # Do NOT call memory.close_fd() here — the fd must remain open until
+        # after mmap() is called.  close() below handles fd cleanup.
 
         # Map the header first (64 bytes) to learn the full size
         header_map = mmap.mmap(self._fd, ctypes.sizeof(_FrameHeader),
@@ -147,7 +144,8 @@ class FrameShmReader:
 
         total_size = (ctypes.sizeof(_FrameHeader) +
                       h.slot_count * h.slot_stride)
-        self._mm = mmap.mmap(self._fd, total_size, mmap.MAP_SHARED, mmap.PROT_READ)
+        self._mm = mmap.mmap(self._fd, total_size, mmap.MAP_SHARED,
+                             mmap.PROT_READ | mmap.PROT_WRITE)
         self._header = _FrameHeader.from_buffer(self._mm)
         self._slot_stride = h.slot_stride
         self._last_read_idx = self._header.write_index  # start from current
@@ -226,10 +224,16 @@ class TelemetryShmReader:
         import posix_ipc  # type: ignore
         memory = posix_ipc.SharedMemory(f"/{self._shm_name}", flags=0)
         self._fd = memory.fd
-        memory.close_fd()
+        # Do NOT call memory.close_fd() — fd must stay open until after mmap().
 
         total_size = ctypes.sizeof(_TelemetryHeader) + 2 * ctypes.sizeof(_TelemetryFrame)
-        self._mm = mmap.mmap(self._fd, total_size, mmap.MAP_SHARED, mmap.PROT_READ)
+        self._mm = mmap.mmap(self._fd, total_size, mmap.MAP_SHARED,
+                             mmap.PROT_READ | mmap.PROT_WRITE)
+
+        hdr = _TelemetryHeader.from_buffer_copy(self._mm, 0)
+        if hdr.magic != CAMSIM_TELEMETRY_MAGIC:
+            raise RuntimeError(f"Telemetry SHM magic mismatch: 0x{hdr.magic:08X}")
+
         return self
 
     def close(self):

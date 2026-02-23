@@ -64,8 +64,10 @@ camera-simulator/
 │   └── klv_decoder.py                 Standalone KLV parser (lib + CLI)
 │
 ├── docker/
-│   ├── Dockerfile.sidecar
-│   └── docker-compose.yml
+│   ├── Dockerfile.sidecar          Sidecar image (Ubuntu + GStreamer)
+│   ├── Dockerfile.framegen         Synthetic frame generator image
+│   ├── docker-compose.yml          Linux production (UE5 on host + sidecar)
+│   └── docker-compose.mac.yml     macOS dev stack (frame-gen + sidecar)
 │
 ├── scripts/
 │   ├── run_desktop.sh                 Desktop launch (GPU)
@@ -83,7 +85,28 @@ camera-simulator/
 
 ## Quick Start
 
-### 1. Prerequisites
+### macOS (Docker — no Unreal Engine required)
+
+The fastest way to see the full MPEG-TS + KLV pipeline. Requires only
+[Docker Desktop for Mac](https://www.docker.com/products/docker-desktop/).
+
+```bash
+# Build and start both containers (synthetic frame-gen + sidecar)
+docker compose -f docker/docker-compose.mac.yml up --build
+
+# In another terminal — watch the stream
+vlc --demux=ts "udp://@:5004"
+
+# Or inspect TS packets + KLV tags
+python tools/recv_and_inspect.py --host 0.0.0.0 --port 5004
+```
+
+See [docs/deployment.md](docs/deployment.md) for resolution/bitrate overrides,
+environment variables, and troubleshooting.
+
+### Full Setup (Unreal Engine + GPU)
+
+#### 1. Prerequisites
 
 - Unreal Engine 5.3+ with Cesium for Unreal plugin
 - GStreamer 1.22+ (`gst-plugins-good`, `gst-plugins-bad`, `gst-plugins-ugly`,
@@ -93,30 +116,30 @@ camera-simulator/
 
 See [docs/development.md](docs/development.md) for detailed install instructions.
 
-### 2. Install the sidecar
+#### 2. Install the sidecar
 
 ```bash
 pip install -e sidecar/
 ```
 
-### 3. Run
+#### 3. Run
 
 ```bash
 export CESIUM_ION_TOKEN="your_token_here"   # never commit this
 ./scripts/run_desktop.sh
 ```
 
-### 4. Receive the stream
+#### 4. Receive the stream
 
 ```bash
 # Video player
-vlc udp://@239.1.1.1:5004
+vlc --demux=ts "udp://@239.1.1.1:5004"
 
 # Inspect TS packets + KLV tags
 python tools/recv_and_inspect.py --multicast 239.1.1.1 --port 5004
 ```
 
-### 5. Send commands
+#### 5. Send commands
 
 ```bash
 # Slew gimbal pan right at 10 deg/s for 5 seconds
@@ -129,7 +152,7 @@ python tools/inject_commands.py set-position --lat 36.5 --lon -117.5 --alt 2000
 python tools/inject_commands.py gimbal-abs --pan 0 --tilt -45
 ```
 
-### 6. Run tests
+#### 6. Run tests
 
 ```bash
 cd sidecar && pytest test_klv_encoder.py -v

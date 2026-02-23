@@ -1,5 +1,5 @@
 # CamSim sidecar Docker image
-# Includes GStreamer with good/bad/ugly/libav/nvenc plugins and Python 3.11+
+# Includes GStreamer with good/bad/ugly/libav/nvenc plugins and Python 3.12+
 #
 # Build:
 #   docker build -f docker/Dockerfile.sidecar -t camsim-sidecar .
@@ -7,7 +7,7 @@
 # Run (GPU):
 #   docker run --gpus all --ipc=host --network=host camsim-sidecar
 
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -27,11 +27,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gir1.2-gstreamer-1.0 \
     gir1.2-gst-plugins-base-1.0 \
     # Python
-    python3.11 \
-    python3.11-dev \
+    python3 \
+    python3-dev \
     python3-pip \
-    # Shared memory utilities
-    librt-dev \
     # Networking
     iproute2 \
     && rm -rf /var/lib/apt/lists/*
@@ -48,8 +46,7 @@ WORKDIR /app
 COPY sidecar/pyproject.toml sidecar/
 COPY sidecar/camsim_sidecar/ sidecar/camsim_sidecar/
 
-RUN pip3 install --no-cache-dir posix-ipc && \
-    pip3 install --no-cache-dir -e sidecar/
+RUN pip3 install --no-cache-dir --break-system-packages posix-ipc
 
 # Copy tools for klv_decoder import
 COPY tools/ tools/
@@ -59,8 +56,13 @@ COPY tools/ tools/
 # ---------------------------------------------------------------------------
 ENV GST_DEBUG=2
 
+# Make camsim_sidecar importable without a pip install step
+# (avoids build-backend version issues with system pip)
+ENV PYTHONPATH=/app/sidecar
+
 # Shared memory is accessed via /dev/shm — requires --ipc=host in docker run
 VOLUME ["/dev/shm"]
 
-ENTRYPOINT ["python3", "-m", "camsim_sidecar"]
+# Use camsim_sidecar.main (no __main__.py in package)
+ENTRYPOINT ["python3", "-m", "camsim_sidecar.main"]
 CMD ["--host", "239.1.1.1", "--port", "5004"]
