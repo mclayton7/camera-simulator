@@ -16,9 +16,8 @@ struct ShmFrameSlot;
  * (BGRA) and writes the frame into the shared-memory ring buffer so that the
  * Python sidecar can pick it up.
  *
- * The readback uses a GPU fence + render-thread enqueue to avoid stalling the
- * game thread.  Actual pixel copy happens one frame late (N-1 latency), which
- * is acceptable for a 30 fps simulator.
+ * Note: this currently uses ReadPixels() on the game thread (GPU flush).
+ * At 30 fps this is acceptable for the simulator; keep allocations minimal.
  *
  * Shared memory layout: see SharedMemoryTypes.h
  */
@@ -43,6 +42,9 @@ protected:
 private:
     UPROPERTY()
     TObjectPtr<USimCameraComponent> CameraComp;
+
+    // Reused buffer to avoid per-tick allocations.
+    TArray<FColor> PixelBuffer;
 
     // Shared memory
     void*    ShmPtr      = nullptr;

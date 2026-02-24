@@ -46,16 +46,20 @@ class _FrameHeader(ctypes.Structure):
 
 
 class _FrameSlot(ctypes.Structure):
-    # Natural alignment: c_uint64 aligns to 8, adding 4 implicit bytes after
-    # height. Total = 32 bytes, matching ShmFrameSlot in SharedMemoryTypes.h.
+    # Keep explicit packing + padding to match SharedMemoryTypes.h byte-for-byte.
+    _pack_ = 1
     _fields_ = [
         ("sequence",     ctypes.c_uint32),
         ("width",        ctypes.c_uint32),
         ("height",       ctypes.c_uint32),
+        ("_pad1",        ctypes.c_uint8 * 4),
         ("timestamp_us", ctypes.c_uint64),
         ("data_size",    ctypes.c_uint32),
         ("_pad",         ctypes.c_uint32),
     ]
+
+assert ctypes.sizeof(_FrameSlot) == 32, \
+    f"ShmFrameSlot size mismatch: {ctypes.sizeof(_FrameSlot)} != 32"
 
 
 class _TelemetryHeader(ctypes.Structure):
@@ -69,9 +73,8 @@ class _TelemetryHeader(ctypes.Structure):
 
 
 class _TelemetryFrame(ctypes.Structure):
-    # Natural alignment: two 4-byte implicit pads (before sensor_lat_deg and
-    # frame_center_lat_deg) plus 4-byte struct trailing pad → 128 bytes,
-    # matching TelemetryFrame in SharedMemoryTypes.h.
+    # Keep explicit packing + padding to match SharedMemoryTypes.h byte-for-byte.
+    _pack_ = 1
     _fields_ = [
         ("timestamp_us",          ctypes.c_uint64),
         ("platform_lat_deg",      ctypes.c_double),
@@ -80,6 +83,7 @@ class _TelemetryFrame(ctypes.Structure):
         ("platform_heading_deg",  ctypes.c_float),
         ("platform_pitch_deg",    ctypes.c_float),
         ("platform_roll_deg",     ctypes.c_float),
+        ("_pad1",                 ctypes.c_uint8 * 4),
         ("sensor_lat_deg",        ctypes.c_double),
         ("sensor_lon_deg",        ctypes.c_double),
         ("sensor_alt_m_hae",      ctypes.c_float),
@@ -89,11 +93,12 @@ class _TelemetryFrame(ctypes.Structure):
         ("hfov_deg",              ctypes.c_float),
         ("vfov_deg",              ctypes.c_float),
         ("slant_range_m",         ctypes.c_float),
+        ("_pad2",                 ctypes.c_uint8 * 4),
         ("frame_center_lat_deg",  ctypes.c_double),
         ("frame_center_lon_deg",  ctypes.c_double),
         ("frame_center_elev_m",   ctypes.c_float),
         ("sequence",              ctypes.c_uint32),
-        ("_pad",                  ctypes.c_uint8 * 4),
+        ("_pad",                  ctypes.c_uint8 * 8),
     ]
 
 

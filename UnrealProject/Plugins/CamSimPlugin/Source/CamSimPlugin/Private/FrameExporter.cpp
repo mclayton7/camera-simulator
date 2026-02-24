@@ -16,7 +16,7 @@
 #include <unistd.h>
 #endif
 
-static const FString SHM_FRAME_NAME = TEXT("camsim_frames");
+static constexpr const TCHAR* SHM_FRAME_NAME = TEXT("camsim_frames");
 
 UFrameExporter::UFrameExporter()
 {
@@ -69,11 +69,10 @@ void UFrameExporter::TickComponent(float DeltaTime, ELevelTick TickType,
     }
 
     // Read pixels from render target (blocks until GPU flush — acceptable at 30 fps)
-    TArray<FColor> Pixels;
     FRenderTarget* RenderTarget = RT->GameThread_GetRenderTargetResource();
     if (!RenderTarget) return;
 
-    if (!RenderTarget->ReadPixels(Pixels))
+    if (!RenderTarget->ReadPixels(PixelBuffer))
     {
         UE_LOG(LogTemp, Warning, TEXT("CamSim FrameExporter: ReadPixels failed"));
         return;
@@ -82,7 +81,7 @@ void UFrameExporter::TickComponent(float DeltaTime, ELevelTick TickType,
     // Timestamp: Unix epoch in microseconds
     const int64 NowUs = FDateTime::UtcNow().GetTicks() / 10; // 100ns → µs
 
-    WriteFrame(Pixels, W, H, static_cast<uint64_t>(NowUs));
+    WriteFrame(PixelBuffer, W, H, static_cast<uint64_t>(NowUs));
 }
 
 // ---------------------------------------------------------------------------
@@ -97,7 +96,7 @@ bool UFrameExporter::OpenSharedMemory(uint32_t Width, uint32_t Height)
     HANDLE Handle = CreateFileMappingA(
         INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE,
         (DWORD)(ShmSize >> 32), (DWORD)(ShmSize & 0xFFFFFFFF),
-        TCHAR_TO_ANSI(*SHM_FRAME_NAME));
+        TCHAR_TO_ANSI(SHM_FRAME_NAME));
     if (!Handle)
     {
         UE_LOG(LogTemp, Error, TEXT("CamSim FrameExporter: CreateFileMapping failed (%d)"), GetLastError());
@@ -113,7 +112,7 @@ bool UFrameExporter::OpenSharedMemory(uint32_t Width, uint32_t Height)
         return false;
     }
 #else
-    const std::string ShmNameUtf8 = TCHAR_TO_UTF8(*SHM_FRAME_NAME);
+    const std::string ShmNameUtf8 = TCHAR_TO_UTF8(SHM_FRAME_NAME);
     const std::string ShmPath     = "/" + ShmNameUtf8;
 
     ShmFd = shm_open(ShmPath.c_str(), O_CREAT | O_RDWR, 0666);
@@ -167,7 +166,7 @@ void UFrameExporter::CloseSharedMemory()
     close(ShmFd);
     ShmFd = -1;
     // Unlink so next run starts fresh
-    shm_unlink(TCHAR_TO_UTF8(*SHM_FRAME_NAME));
+    shm_unlink(TCHAR_TO_UTF8(SHM_FRAME_NAME));
 #endif
     ShmPtr = nullptr;
     Header = nullptr;

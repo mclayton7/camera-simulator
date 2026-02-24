@@ -2,10 +2,10 @@
 
 #include "CoreMinimal.h"
 #include "Components/SceneCaptureComponent2D.h"
+#include "CesiumGeoreference.h"
 #include "SimCameraComponent.generated.h"
 
 class UGimbalComponent;
-class ACesiumGeoreference;
 
 /**
  * USimCameraComponent

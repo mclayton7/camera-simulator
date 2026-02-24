@@ -123,7 +123,7 @@ void UCommandReceiver::DrainSocket()
 {
     if (!Socket) return;
 
-    static uint8 RecvBuf[256];
+    uint8 RecvBuf[256];
 
     uint32 PendingSize = 0;
     while (Socket->HasPendingData(PendingSize))

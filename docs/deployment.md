@@ -398,15 +398,16 @@ produces a standalone Linux binary with no editor dependency.
     -archivedirectory="$(pwd)/PackagedBuild"
 ```
 
-This creates `PackagedBuild/LinuxServer/CameraSimulator/` with the packaged
-binary, content paks, and required shared libraries.
+This creates `PackagedBuild/Linux/` containing `CameraSimulator.sh` plus the
+`CameraSimulator/` directory with the packaged binary, content paks, and
+required shared libraries.
 
 ### Step 2 — Build the UE5 Container Image
 
-Create `docker/Dockerfile.ue5`:
+Use `docker/Dockerfile.ue5`:
 
 ```dockerfile
-FROM nvidia/vulkan:1.3-470 AS base
+FROM nvidia/cuda:13.0.2-base-ubuntu24.04 AS base
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -416,7 +417,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the packaged UE5 build
-COPY PackagedBuild/LinuxServer/CameraSimulator /opt/camsim
+COPY PackagedBuild/Linux /opt/camsim
 
 # Make the binary executable
 RUN chmod +x /opt/camsim/CameraSimulator.sh

@@ -1,0 +1,69 @@
+FROM nvidia/cuda:13.0.2-base-ubuntu24.04 AS base
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libvulkan1 vulkan-tools \
+        libx11-6 libxext6 libxrandr2 libxi6 libgl1 \
+        xdg-user-dirs \
+        xvfb \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy the packaged UE5 build
+COPY PackagedBuild/Linux /opt/camsim
+
+# Make the binary executable
+RUN chmod +x /opt/camsim/CameraSimulator.sh
+
+# Unreal (and some bundled components) refuse to run as root.
+# Don't force a UID (it may already be taken in some base images).
+RUN id -u camsim >/dev/null 2>&1 || useradd -m -s /bin/bash camsim \
+    && mkdir -p /tmp/.X11-unix \
+    && chmod 1777 /tmp/.X11-unix \
+    && mkdir -p /tmp/runtime-camsim \
+    && chown -R camsim:camsim /opt/camsim /tmp/runtime-camsim \
+    && chmod 700 /tmp/runtime-camsim
+
+# Xvfb display + Vulkan rendering
+ENV DISPLAY=:99 \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=graphics,compute,utility \
+    HOME=/home/camsim \
+    XDG_RUNTIME_DIR=/tmp/runtime-camsim
+
+USER camsim
+
+ENTRYPOINT ["/bin/bash", "-lc", "\
+set -euo pipefail\n\
+\n\
+echo \"--- vulkaninfo --summary (preflight) ---\" || true\n\
+vulkaninfo --summary 2>/dev/null | head -120 || echo \"vulkaninfo failed\"\n\
+\n\
+\n\
+Xvfb :99 -screen 0 1920x1080x24 &\n\
+sleep 2\n\
+\n\
+/opt/camsim/CameraSimulator.sh \\\n\
+  -RHI=Vulkan \\\n\
+  -unattended \\\n\
+  -nosplash \\\n\
+  -nosound \\\n\
+  -nullrhi=0 \\\n\
+  -log \\\n\
+  -stdout -FullStdOutLogOutput \\\n\
+  \"$@\"\n\
+\n\
+status=$?\n\
+echo \"CamSim UE5 exited with status ${status}\"\n\
+\n\
+LOGDIR=/opt/camsim/CameraSimulator/Saved/Logs\n\
+if [ -d \"${LOGDIR}\" ]; then\n\
+  echo \"--- UE Logs (tail) ---\"\n\
+  for f in \"${LOGDIR}\"/*.log; do\n\
+    [ -e \"$f\" ] || continue\n\
+    echo \"== $f ==\"\n\
+    tail -200 \"$f\" || true\n\
+  done\n\
+fi\n\
+\n\
+exit ${status}\n\
+","--"]

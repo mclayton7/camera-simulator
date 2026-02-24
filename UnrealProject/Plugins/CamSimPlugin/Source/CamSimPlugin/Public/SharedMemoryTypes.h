@@ -54,6 +54,7 @@ struct ShmFrameSlot
     uint32_t sequence;      // monotonically increasing frame counter
     uint32_t width;
     uint32_t height;
+    uint8_t  _pad1[4];      // explicit pad: matches natural alignment of uint64_t in Python ctypes
     uint64_t timestamp_us;  // Unix epoch microseconds (UTC)
     uint32_t data_size;     // width * height * 4
     uint32_t _pad;
@@ -96,6 +97,8 @@ struct TelemetryFrame
     float    platform_pitch_deg;        //  4  ±90
     float    platform_roll_deg;         //  4  ±180
 
+    uint8_t  _pad1[4];                  //  4  explicit: matches double alignment gap in Python ctypes
+
     double   sensor_lat_deg;            //  8  sensor aperture WGS-84
     double   sensor_lon_deg;            //  8
     float    sensor_alt_m_hae;          //  4
@@ -108,15 +111,17 @@ struct TelemetryFrame
     float    vfov_deg;                  //  4  vertical field-of-view
     float    slant_range_m;             //  4  line-of-sight range to ground (m)
 
+    uint8_t  _pad2[4];                  //  4  explicit: matches double alignment gap in Python ctypes
+
     double   frame_center_lat_deg;      //  8  image centre ground point
     double   frame_center_lon_deg;      //  8
     float    frame_center_elev_m;       //  4  ellipsoidal elevation of ground pt
 
     uint32_t sequence;                  //  4  written last; sidecar checks before+after
 
-    uint8_t  _pad[4];                   //  4  align to 8 bytes
+    uint8_t  _pad[8];                   //  8  explicit _pad + trailing struct alignment (matches Python 128-byte layout)
 };
-// Expected size: 8+8+8+8+4+4+4+8+8+4+4+4+4+4+4+4+8+8+4+4+4 = 128 bytes
+// Expected size: 8+8+8+8 + 4+4+4 + 4(_pad1) + 8+8+4 + 4+4+4+4+4+4 + 4(_pad2) + 8+8+4+4 + 8(_pad) = 128 bytes
 static_assert(sizeof(TelemetryFrame) == 128, "TelemetryFrame must be 128 bytes");
 
 struct ShmTelemetryHeader

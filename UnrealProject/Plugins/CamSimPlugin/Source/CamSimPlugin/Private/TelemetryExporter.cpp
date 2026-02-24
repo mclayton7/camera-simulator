@@ -4,6 +4,7 @@
 #include "SimCameraComponent.h"
 #include "SharedMemoryTypes.h"
 
+#include "HAL/PlatformMisc.h"
 #include "Misc/DateTime.h"
 
 #if PLATFORM_WINDOWS
@@ -15,7 +16,7 @@
 #include <unistd.h>
 #endif
 
-static const FString SHM_TEL_NAME = TEXT("camsim_telemetry");
+static constexpr const TCHAR* SHM_TEL_NAME = TEXT("camsim_telemetry");
 
 UTelemetryExporter::UTelemetryExporter()
 {
@@ -68,13 +69,13 @@ bool UTelemetryExporter::OpenSharedMemory()
     HANDLE Handle = CreateFileMappingA(
         INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE,
         0, static_cast<DWORD>(ShmSize),
-        TCHAR_TO_ANSI(*SHM_TEL_NAME));
+        TCHAR_TO_ANSI(SHM_TEL_NAME));
     if (!Handle) return false;
     ShmHandle = Handle;
     ShmPtr    = MapViewOfFile(Handle, FILE_MAP_ALL_ACCESS, 0, 0, ShmSize);
     if (!ShmPtr) { CloseHandle(Handle); ShmHandle = nullptr; return false; }
 #else
-    const std::string ShmPath = "/" + std::string(TCHAR_TO_UTF8(*SHM_TEL_NAME));
+    const std::string ShmPath = "/" + std::string(TCHAR_TO_UTF8(SHM_TEL_NAME));
     ShmFd = shm_open(ShmPath.c_str(), O_CREAT | O_RDWR, 0666);
     if (ShmFd < 0) return false;
     if (ftruncate(ShmFd, static_cast<off_t>(ShmSize)) != 0)
@@ -108,7 +109,7 @@ void UTelemetryExporter::CloseSharedMemory()
     munmap(ShmPtr, ShmSize);
     close(ShmFd);
     ShmFd = -1;
-    shm_unlink(TCHAR_TO_UTF8(*SHM_TEL_NAME));
+    shm_unlink(TCHAR_TO_UTF8(SHM_TEL_NAME));
 #endif
     ShmPtr = nullptr;
     Header = nullptr;
@@ -157,5 +158,6 @@ void UTelemetryExporter::BuildAndWrite()
     F.frame_center_elev_m  = Camera->FrameCenterElevM;
 
     // Write sequence last — this is the "unlock" in the seqlock
+    FPlatformMisc::MemoryBarrier();
     F.sequence = ++TelSeq;
 }

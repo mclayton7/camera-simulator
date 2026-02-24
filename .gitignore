@@ -5,6 +5,8 @@ UnrealProject/DerivedDataCache/
 UnrealProject/Intermediate/
 UnrealProject/Saved/
 UnrealProject/.vs/
+UnrealProject/Plugins/**/Binaries/
+UnrealProject/Plugins/**/Intermediate/
 *.uasset
 *.umap
 *.vc.db
@@ -36,6 +38,9 @@ venv/
 
 # Linux
 *~
+
+# Packaged builds (UAT output)
+PackagedBuild/
 
 # Docker
 docker/.env

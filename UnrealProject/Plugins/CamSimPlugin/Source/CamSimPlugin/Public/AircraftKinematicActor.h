@@ -2,9 +2,9 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "CesiumGeoreference.h"
 #include "AircraftKinematicActor.generated.h"
 
-class UCesiumGeoreference;
 class UGimbalComponent;
 class USimCameraComponent;
 class UCommandReceiver;
